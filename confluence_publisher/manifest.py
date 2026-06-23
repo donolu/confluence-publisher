@@ -81,6 +81,8 @@ def save_manifest(manifest: Manifest) -> None:
         page_data = (data.get("pages") or {}).get(file_path)
         if page_data is None:
             continue
+        if entry.page_id is not None:
+            page_data["page_id"] = entry.page_id   # persist auto-created page IDs
         if entry.last_published_hash is not None:
             page_data["last_published_hash"] = entry.last_published_hash
         if entry.last_published_version is not None:

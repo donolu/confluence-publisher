@@ -42,6 +42,7 @@ class ConfluenceClient:
         self.base_url = base_url.rstrip("/")
         pem_path = _write_pem(cert_pem_b64) if cert_pem_b64 else None
         self._session = self._build_session(token, email, pem_path)
+        self._space_id_cache: dict[str, str] = {}
 
     def _build_session(self, token: str, email: str | None, pem_path: str | None) -> requests.Session:
         session = requests.Session()
@@ -77,6 +78,8 @@ class ConfluenceClient:
         response.raise_for_status()
         return response
 
+    # --- Page read / write ---
+
     def get_page(self, page_id: str) -> dict:
         if self.mode == "dc":
             url = self._url(f"{page_id}?expand=version,body.storage")
@@ -88,10 +91,7 @@ class ConfluenceClient:
         else:
             url = self._url(f"pages/{page_id}?body-format=storage")
             data = self._request("GET", url).json()
-            # Cloud v2 returns body.storage.value when body-format=storage is requested
-            body_val = (
-                data.get("body", {}).get("storage", {}).get("value", "")
-            )
+            body_val = data.get("body", {}).get("storage", {}).get("value", "")
             return {
                 "version": data["version"]["number"],
                 "body": body_val,
@@ -123,6 +123,72 @@ class ConfluenceClient:
                 "body": {"representation": "storage", "value": body},
             }
         return self._request("PUT", url, json=payload).json()
+
+    def create_page(self, title: str, space_key: str, parent_id: str, body: str) -> str:
+        """Create a new page and return its page ID."""
+        if self.mode == "dc":
+            url = f"{self.base_url}/rest/api/content"
+            payload: dict = {
+                "type": "page",
+                "title": title,
+                "space": {"key": space_key},
+                "body": {"storage": {"value": body, "representation": "storage"}},
+            }
+            if parent_id:
+                payload["ancestors"] = [{"id": parent_id}]
+        else:
+            space_id = self._resolve_space_id(space_key)
+            url = f"{self.base_url}/wiki/api/v2/pages"
+            payload = {
+                "spaceId": space_id,
+                "status": "current",
+                "title": title,
+                "body": {"representation": "storage", "value": body},
+            }
+            if parent_id:
+                payload["parentId"] = parent_id
+        data = self._request("POST", url, json=payload).json()
+        return str(data["id"])
+
+    def upload_attachment(
+        self,
+        page_id: str,
+        filename: str,
+        data: bytes,
+        mime_type: str = "application/octet-stream",
+    ) -> None:
+        """Upload a file as a page attachment, replacing any existing attachment with the same name."""
+        if self.mode == "dc":
+            url = f"{self.base_url}/rest/api/content/{page_id}/child/attachment"
+        else:
+            url = f"{self.base_url}/wiki/api/v2/pages/{page_id}/attachments"
+        # Strip Content-Type so requests can set it correctly for multipart/form-data
+        auth_header = self._session.headers.get("Authorization", "")
+        headers = {
+            "Authorization": auth_header,
+            "X-Atlassian-Token": "nocheck",
+        }
+        r = requests.post(
+            url,
+            files={"file": (filename, data, mime_type)},
+            headers=headers,
+            timeout=60,
+        )
+        if r.status_code not in (200, 201):
+            r.raise_for_status()
+
+    def _resolve_space_id(self, space_key: str) -> str:
+        """Resolve a space key to its numeric ID (Cloud only, cached)."""
+        if space_key in self._space_id_cache:
+            return self._space_id_cache[space_key]
+        url = f"{self.base_url}/wiki/api/v2/spaces?keys={space_key}&limit=1"
+        data = self._request("GET", url).json()
+        results = data.get("results", [])
+        if not results:
+            raise ValueError(f"Space '{space_key}' not found in Confluence")
+        sid = str(results[0]["id"])
+        self._space_id_cache[space_key] = sid
+        return sid
 
     def page_exists(self, page_id: str) -> bool:
         try:

@@ -1,20 +1,40 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 
 import mistletoe
 from mistletoe import Document
 from mistletoe.base_renderer import BaseRenderer
+
+logger = logging.getLogger(__name__)
 
 
 class ConversionError(Exception):
     pass
 
 
+@dataclass
+class ConversionResult:
+    body: str                         # without banner, used for content hashing
+    full_body: str                    # banner + body, what gets published
+    images: list[str] = field(default_factory=list)  # repo-root-relative paths of local images
+
+
 class ConfluenceRenderer(BaseRenderer):
-    def __init__(self, source_path: str = "<unknown>", **kwargs):
+    def __init__(
+        self,
+        source_path: str = "<unknown>",
+        page_id_map: dict[str, str] | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.source_path = source_path
+        self._page_id_map = page_id_map or {}
+        self._source_dir = str(PurePosixPath(source_path).parent)
+        self.images: list[str] = []
 
     def render(self, token):
         node_type = type(token).__name__
@@ -45,7 +65,6 @@ class ConfluenceRenderer(BaseRenderer):
 
     def render_block_code(self, token):
         # Handles both CodeFence (``` blocks) and BlockCode (indented blocks).
-        # CodeFence carries a language attribute; BlockCode does not.
         code = token.children[0].content if token.children else ""
         language = getattr(token, "language", "") or ""
         if language == "mermaid":
@@ -114,14 +133,43 @@ class ConfluenceRenderer(BaseRenderer):
         return f"<code>{_escape(code)}</code>"
 
     def render_link(self, token):
-        target = _escape_attr(token.target)
-        return f'<a href="{target}">{self.render_inner(token)}</a>'
+        target = token.target
+        if (
+            not _is_external(target)
+            and not target.startswith("#")
+            and target.rstrip("?#").endswith(".md")
+        ):
+            # Strip any fragment/query from the path for lookup
+            md_path = target.split("?")[0].split("#")[0]
+            resolved = _resolve_path(self._source_dir, md_path)
+            page_id = self._page_id_map.get(resolved)
+            if page_id:
+                inner = self.render_inner(token)
+                return (
+                    f"<ac:link>"
+                    f'<ri:page ri:content-id="{page_id}"/>'
+                    f"<ac:plain-text-link-body>"
+                    f"<![CDATA[{inner}]]>"
+                    f"</ac:plain-text-link-body>"
+                    f"</ac:link>"
+                )
+            logger.warning(
+                "'%s': internal link to '%s' not in manifest — kept as plain link",
+                self.source_path,
+                target,
+            )
+        return f'<a href="{_escape_attr(target)}">{self.render_inner(token)}</a>'
 
     def render_image(self, token):
-        raise ConversionError(
-            f"Images are not supported until Phase 2 ('{self.source_path}'). "
-            f"Remove the image or wait for Phase 2."
-        )
+        src = token.src
+        alt = token.children[0].content if token.children else ""
+        alt_attr = f' ac:alt="{_escape_attr(alt)}"' if alt else ""
+        if _is_external(src):
+            return f'<ac:image{alt_attr}><ri:url ri:value="{_escape_attr(src)}"/></ac:image>'
+        resolved = _resolve_path(self._source_dir, src)
+        self.images.append(resolved)
+        filename = PurePosixPath(src).name
+        return f'<ac:image{alt_attr}><ri:attachment ri:filename="{_escape_attr(filename)}"/></ac:image>'
 
     def render_line_break(self, token):
         return " " if token.soft else "<br/>"
@@ -148,6 +196,23 @@ def _escape_attr(text: str) -> str:
     return text.replace("&", "&amp;").replace('"', "&quot;")
 
 
+def _is_external(url: str) -> bool:
+    return url.startswith(("http://", "https://", "mailto:", "ftp://", "//"))
+
+
+def _resolve_path(source_dir: str, rel_path: str) -> str:
+    """Normalise a path relative to source_dir into a repo-root-relative forward-slash path."""
+    raw = (source_dir + "/" + rel_path) if source_dir and source_dir != "." else rel_path
+    parts: list[str] = []
+    for part in raw.replace("\\", "/").split("/"):
+        if part == "..":
+            if parts:
+                parts.pop()
+        elif part and part != ".":
+            parts.append(part)
+    return "/".join(parts)
+
+
 def build_banner(source_path: str, commit_sha: str) -> str:
     return (
         f'<ac:structured-macro ac:name="info">'
@@ -165,14 +230,22 @@ def content_hash(body: str) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
 
-def convert(text: str, source_path: str, commit_sha: str) -> tuple[str, str]:
-    """Return (body_without_banner, full_page_body) for a Markdown string.
+def convert(
+    text: str,
+    source_path: str,
+    commit_sha: str,
+    page_id_map: dict[str, str] | None = None,
+) -> ConversionResult:
+    """Convert Markdown to Confluence Storage Format.
 
-    body_without_banner is used for change detection hashing.
-    full_page_body is what gets published to Confluence.
+    Returns a ConversionResult with:
+    - body: converted content without banner (used for hashing)
+    - full_body: banner + body (what gets published)
+    - images: repo-root-relative paths of local images referenced in the doc
     """
-    with ConfluenceRenderer(source_path=source_path) as renderer:
+    with ConfluenceRenderer(source_path=source_path, page_id_map=page_id_map) as renderer:
         doc = Document(text)
         body = renderer.render(doc)
+        images = list(renderer.images)
     banner = build_banner(source_path, commit_sha)
-    return body, banner + body
+    return ConversionResult(body=body, full_body=banner + body, images=images)

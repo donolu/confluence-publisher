@@ -1,17 +1,19 @@
 import pytest
 from confluence_publisher.converter import (
     ConversionError,
+    ConversionResult,
     ConfluenceRenderer,
     build_banner,
     content_hash,
     convert,
+    _resolve_path,
 )
 import mistletoe
 from mistletoe import Document
 
 
-def render(md: str, source: str = "test.md") -> str:
-    with ConfluenceRenderer(source_path=source) as r:
+def render(md: str, source: str = "test.md", page_id_map: dict | None = None) -> str:
+    with ConfluenceRenderer(source_path=source, page_id_map=page_id_map) as r:
         return r.render(Document(md))
 
 
@@ -108,6 +110,46 @@ def test_link_href_escaping():
     assert "&amp;" in out
     assert "&quot;" in out
 
+def test_internal_link_known():
+    pid_map = {"docs/other.md": "42"}
+    out = render("[see other](other.md)", source="docs/index.md", page_id_map=pid_map)
+    assert 'ri:content-id="42"' in out
+    assert "<ac:link>" in out
+    assert "see other" in out
+
+def test_internal_link_unknown_falls_back_to_plain():
+    out = render("[see other](other.md)", source="docs/index.md", page_id_map={})
+    assert '<a href="other.md">' in out
+    assert "<ac:link>" not in out
+
+def test_internal_link_with_path_traversal():
+    pid_map = {"docs/arch.md": "99"}
+    out = render("[arch](../docs/arch.md)", source="notes/index.md", page_id_map=pid_map)
+    assert 'ri:content-id="99"' in out
+
+
+# --- Images ---
+
+def test_image_external_renders():
+    out = render("![alt text](https://example.com/img.png)")
+    assert "<ac:image" in out
+    assert '<ri:url ri:value="https://example.com/img.png"/>' in out
+    assert 'ac:alt="alt text"' in out
+
+def test_image_local_renders_as_attachment():
+    out = render("![diagram](images/fig.png)", source="docs/arch.md")
+    assert "<ac:image" in out
+    assert '<ri:attachment ri:filename="fig.png"/>' in out
+
+def test_image_local_collected():
+    with ConfluenceRenderer(source_path="docs/arch.md") as r:
+        r.render(Document("![a](images/fig.png)\n![b](images/other.png)\n"))
+        assert r.images == ["docs/images/fig.png", "docs/images/other.png"]
+
+def test_image_no_alt():
+    out = render("![](images/fig.png)", source="docs/arch.md")
+    assert "<ac:image>" in out or "<ac:image " not in out or 'ac:alt=""' not in out
+
 
 # --- Thematic break ---
 
@@ -130,10 +172,6 @@ def test_soft_line_break_is_space():
 
 
 # --- Unsupported nodes raise ConversionError ---
-
-def test_image_raises():
-    with pytest.raises(ConversionError, match="Phase 2"):
-        render("![alt](image.png)")
 
 def test_table_renders():
     body = render("| a | b |\n|---|---|\n| 1 | 2 |\n")
@@ -161,18 +199,51 @@ def test_build_banner_escapes_path():
 
 # --- convert() ---
 
-def test_convert_returns_tuple():
-    body, full = convert("# Hello\n", "test.md", "abc1234")
-    assert "<h1>Hello</h1>" in body
-    assert "<h1>Hello</h1>" in full
-    assert 'ac:name="info"' in full
-    assert "abc1234" in full
-    assert 'ac:name="info"' not in body
+def test_convert_returns_result():
+    result = convert("# Hello\n", "test.md", "abc1234")
+    assert isinstance(result, ConversionResult)
+    assert "<h1>Hello</h1>" in result.body
+    assert "<h1>Hello</h1>" in result.full_body
+    assert 'ac:name="info"' in result.full_body
+    assert "abc1234" in result.full_body
+    assert 'ac:name="info"' not in result.body
 
 def test_convert_banner_prepended():
-    body, full = convert("para\n", "f.md", "sha")
-    assert full.startswith('<ac:structured-macro ac:name="info">')
-    assert full.endswith("<p>para</p>")
+    result = convert("para\n", "f.md", "sha")
+    assert result.full_body.startswith('<ac:structured-macro ac:name="info">')
+    assert result.full_body.endswith("<p>para</p>")
+
+def test_convert_collects_images():
+    result = convert("![fig](images/fig.png)\n", "docs/arch.md", "sha")
+    assert result.images == ["docs/images/fig.png"]
+
+def test_convert_no_images_on_external():
+    result = convert("![fig](https://example.com/fig.png)\n", "docs/arch.md", "sha")
+    assert result.images == []
+
+def test_convert_internal_links_resolved():
+    result = convert(
+        "[see arch](arch.md)\n",
+        "docs/index.md",
+        "sha",
+        page_id_map={"docs/arch.md": "42"},
+    )
+    assert 'ri:content-id="42"' in result.body
+
+
+# --- _resolve_path ---
+
+def test_resolve_path_simple():
+    assert _resolve_path("docs", "arch.md") == "docs/arch.md"
+
+def test_resolve_path_traversal():
+    assert _resolve_path("docs/adr", "../arch.md") == "docs/arch.md"
+
+def test_resolve_path_root_file():
+    assert _resolve_path("", "README.md") == "README.md"
+
+def test_resolve_path_nested():
+    assert _resolve_path("docs", "images/fig.png") == "docs/images/fig.png"
 
 
 # --- content_hash ---
@@ -193,11 +264,11 @@ def test_sample_fixture(tmp_path):
         "[link](https://example.com)\n\n"
         "> quote\n\n---\n"
     )
-    body, full = convert(sample, "sample.md", "deadbeef")
-    assert "<h1>Title</h1>" in body
-    assert "<strong>bold</strong>" in body
-    assert "<em>italic</em>" in body
-    assert 'ac:name="code"' in body
-    assert "<blockquote>" in body
-    assert "<hr/>" in body
-    assert "deadbeef" in full
+    result = convert(sample, "sample.md", "deadbeef")
+    assert "<h1>Title</h1>" in result.body
+    assert "<strong>bold</strong>" in result.body
+    assert "<em>italic</em>" in result.body
+    assert 'ac:name="code"' in result.body
+    assert "<blockquote>" in result.body
+    assert "<hr/>" in result.body
+    assert "deadbeef" in result.full_body

@@ -37,6 +37,7 @@ def make_client(version: int = 5) -> MagicMock:
     client = MagicMock()
     client.get_page.return_value = {"version": version, "body": "<p>old</p>"}
     client.update_page.return_value = {"id": "111"}
+    client.create_page.return_value = "999"
     return client
 
 
@@ -70,10 +71,8 @@ def test_publish_passes_commit_sha(tmp_path):
 def test_skip_when_hash_unchanged(tmp_path):
     root, manifest = make_repo(tmp_path)
     client = make_client()
-    # First publish - sets the hash
     publish_pages(manifest, ["docs/arch.md"], client, "sha1", root)
     client.reset_mock()
-    # Second publish with same content - should skip
     summary = publish_pages(manifest, ["docs/arch.md"], client, "sha2", root)
     client.update_page.assert_not_called()
     assert len(summary.skipped) == 1
@@ -84,7 +83,6 @@ def test_republish_when_content_changes(tmp_path):
     client = make_client()
     publish_pages(manifest, ["docs/arch.md"], client, "sha1", root)
     client.reset_mock()
-    # Change the file
     (tmp_path / "docs/arch.md").write_text("# New Content\n")
     client.get_page.return_value = {"version": 6, "body": "<p>old</p>"}
     summary = publish_pages(manifest, ["docs/arch.md"], client, "sha2", root)
@@ -95,9 +93,7 @@ def test_republish_when_content_changes(tmp_path):
 def test_edit_conflict_logs_warning(tmp_path):
     root, manifest = make_repo(tmp_path)
     client = make_client(version=5)
-    # First publish at version 5 -> stored version = 6
     publish_pages(manifest, ["docs/arch.md"], client, "sha1", root)
-    # Simulate someone manually editing: current version is now 8 (was 6 after our publish)
     client.get_page.return_value = {"version": 8, "body": "<p>manual edit</p>"}
     (tmp_path / "docs/arch.md").write_text("# Updated\n")
     manifest2 = load_manifest(tmp_path)
@@ -126,28 +122,12 @@ def test_file_not_on_disk_is_error(tmp_path):
 
 def test_conversion_error_is_error(tmp_path):
     root, manifest = make_repo(
-        tmp_path, files={"docs/arch.md": "![img](photo.png)\n", "docs/runbook.md": "text"}
+        tmp_path, files={"docs/arch.md": "~~strikethrough~~\n", "docs/runbook.md": "text"}
     )
     client = make_client()
     summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", root)
     assert not summary.succeeded
     client.update_page.assert_not_called()
-
-
-def test_no_page_id_is_error(tmp_path):
-    data = {
-        "version": 1,
-        "defaults": {},
-        "pages": {"docs/arch.md": {"title": "Arch"}},
-    }
-    (tmp_path / "confluence-manifest.yaml").write_text(yaml.dump(data))
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs/arch.md").write_text("# Arch\n")
-    manifest = load_manifest(tmp_path)
-    client = make_client()
-    summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", tmp_path)
-    assert not summary.succeeded
-    assert "page_id" in summary.errors[0].message
 
 
 def test_api_error_is_error(tmp_path):
@@ -157,6 +137,119 @@ def test_api_error_is_error(tmp_path):
     summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", root)
     assert not summary.succeeded
     assert "connection refused" in summary.errors[0].message
+
+
+# --- Auto page creation ---
+
+def test_auto_create_when_no_page_id(tmp_path):
+    data = {
+        "version": 1,
+        "defaults": {"space_id": "TEST", "parent_id": ""},
+        "pages": {"docs/arch.md": {"title": "Architecture"}},
+    }
+    (tmp_path / "confluence-manifest.yaml").write_text(yaml.dump(data))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/arch.md").write_text("# Arch\n\nContent.\n")
+    manifest = load_manifest(tmp_path)
+    client = make_client()
+    client.create_page.return_value = "999"
+
+    summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", tmp_path)
+
+    assert summary.succeeded
+    assert len(summary.published) == 1
+    assert summary.published[0].message == "created"
+    client.create_page.assert_called_once()
+    client.update_page.assert_not_called()
+    # page_id written back to manifest entry
+    assert manifest.pages["docs/arch.md"].page_id == "999"
+
+
+def test_auto_create_page_id_persisted_in_manifest(tmp_path):
+    data = {
+        "version": 1,
+        "defaults": {"space_id": "TEST"},
+        "pages": {"docs/arch.md": {"title": "Architecture"}},
+    }
+    (tmp_path / "confluence-manifest.yaml").write_text(yaml.dump(data))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/arch.md").write_text("# Arch\n")
+    manifest = load_manifest(tmp_path)
+    client = make_client()
+    client.create_page.return_value = "777"
+
+    publish_pages(manifest, ["docs/arch.md"], client, "sha", tmp_path)
+
+    saved = yaml.safe_load((tmp_path / "confluence-manifest.yaml").read_text())
+    assert saved["pages"]["docs/arch.md"]["page_id"] == "777"
+
+
+def test_auto_create_passes_space_and_parent(tmp_path):
+    data = {
+        "version": 1,
+        "defaults": {"space_id": "MYSPACE", "parent_id": "55"},
+        "pages": {"docs/arch.md": {"title": "Architecture"}},
+    }
+    (tmp_path / "confluence-manifest.yaml").write_text(yaml.dump(data))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/arch.md").write_text("# Arch\n")
+    manifest = load_manifest(tmp_path)
+    client = make_client()
+
+    publish_pages(manifest, ["docs/arch.md"], client, "sha", tmp_path)
+
+    _, kwargs = client.create_page.call_args
+    assert kwargs["space_key"] == "MYSPACE"
+    assert kwargs["parent_id"] == "55"
+    assert kwargs["title"] == "Architecture"
+
+
+def test_auto_create_dry_run_does_not_call_api(tmp_path):
+    data = {
+        "version": 1,
+        "defaults": {"space_id": "TEST"},
+        "pages": {"docs/arch.md": {"title": "Architecture"}},
+    }
+    (tmp_path / "confluence-manifest.yaml").write_text(yaml.dump(data))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/arch.md").write_text("# Arch\n")
+    manifest = load_manifest(tmp_path)
+    client = make_client()
+
+    summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", tmp_path, dry_run=True)
+
+    client.create_page.assert_not_called()
+    assert len(summary.published) == 1
+    assert "would create" in summary.published[0].message
+
+
+# --- Image upload ---
+
+def test_images_uploaded_on_publish(tmp_path):
+    root, manifest = make_repo(tmp_path)
+    img_dir = tmp_path / "docs" / "images"
+    img_dir.mkdir()
+    (img_dir / "fig.png").write_bytes(b"\x89PNG")
+    (tmp_path / "docs/arch.md").write_text("![fig](images/fig.png)\n")
+    client = make_client()
+
+    publish_pages(manifest, ["docs/arch.md"], client, "sha", root)
+
+    client.upload_attachment.assert_called_once()
+    _, kwargs = client.upload_attachment.call_args
+    assert kwargs["filename"] == "fig.png"
+    assert kwargs["data"] == b"\x89PNG"
+
+
+def test_missing_image_does_not_fail_publish(tmp_path):
+    root, manifest = make_repo(tmp_path)
+    (tmp_path / "docs/arch.md").write_text("![missing](images/missing.png)\n")
+    client = make_client()
+
+    summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", root)
+
+    assert summary.succeeded
+    client.upload_attachment.assert_not_called()
 
 
 # --- Dry run ---
@@ -195,7 +288,21 @@ def test_check_pages_missing_file(tmp_path):
 
 def test_check_pages_unsupported_syntax(tmp_path):
     root, manifest = make_repo(
-        tmp_path, files={"docs/arch.md": "![img](photo.png)", "docs/runbook.md": "text"}
+        tmp_path, files={"docs/arch.md": "~~strikethrough~~", "docs/runbook.md": "text"}
     )
     errors = check_pages(manifest, root)
-    assert any("Phase 2" in e for e in errors)
+    assert any("Strikethrough" in e for e in errors)
+
+
+def test_check_pages_no_page_id_is_ok(tmp_path):
+    data = {
+        "version": 1,
+        "defaults": {"space_id": "TEST"},
+        "pages": {"docs/arch.md": {"title": "Arch"}},
+    }
+    (tmp_path / "confluence-manifest.yaml").write_text(yaml.dump(data))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/arch.md").write_text("# Arch\n")
+    manifest = load_manifest(tmp_path)
+    errors = check_pages(manifest, tmp_path)
+    assert errors == []
