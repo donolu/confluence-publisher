@@ -1,10 +1,11 @@
 version: 1
-
 defaults:
-  space_id: "Bazzoniare"
-  parent_id: ""
-
+  space_id: Bazzoniare
+  parent_id: ''
 pages:
   test-docs/hello-world.md:
-    page_id: "327687"
+    page_id: '327687'
     title: Hello World (confluence-publisher test)
+    last_published_hash: ba545013380b00e681489de7fc0cced445afc273e9241656eedd1d3ff7cda288
+    last_published_version: 2
+    last_published_commit: bb91119
