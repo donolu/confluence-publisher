@@ -18,9 +18,9 @@ pages:
   docs/ARCHITECTURE.md:
     page_id: '66085'
     title: Architecture
-    last_published_hash: 6b59b86e31249f82a11764e9c918c08545a698e7a41c7291c239b47aa77c174b
-    last_published_version: 2
-    last_published_commit: 168ff7b
+    last_published_hash: fd5fc370c0d8e5845a1fd69870726f5bdf65a55acf2420052d90a602695da6c4
+    last_published_version: 3
+    last_published_commit: 9072b89
   docs/DELIVERY_PLAN.md:
     page_id: '66105'
     title: Delivery Plan
