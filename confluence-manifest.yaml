@@ -1,10 +1,10 @@
 version: 1
 
 defaults:
-  space_id: "~PERSONAL"
+  space_id: "Bazzoniare"
   parent_id: ""
 
 pages:
   test-docs/hello-world.md:
-    page_id: "PLACEHOLDER"
+    page_id: "327687"
     title: Hello World (confluence-publisher test)
