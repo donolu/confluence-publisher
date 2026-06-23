@@ -68,9 +68,20 @@ def test_fenced_code_no_language():
     assert 'ac:name="language"' not in out
     assert "<![CDATA[some code\n]]>" in out
 
-def test_mermaid_raises():
-    with pytest.raises(ConversionError, match="Mermaid"):
-        render("```mermaid\ngraph TD\n```")
+def test_mermaid_renders_as_attachment():
+    body = render("```mermaid\ngraph TD\n```")
+    assert '<ri:attachment ri:filename="mermaid-0.png"/>' in body
+    assert "<ac:image>" in body
+
+def test_mermaid_multiple_diagrams():
+    body = render("```mermaid\nA\n```\n\n```mermaid\nB\n```\n")
+    assert 'mermaid-0.png' in body
+    assert 'mermaid-1.png' in body
+
+def test_mermaid_blocks_collected():
+    with ConfluenceRenderer(source_path="test.md") as r:
+        r.render(Document("```mermaid\ngraph TD\n  A --> B\n```\n"))
+        assert r.mermaid_blocks == ["graph TD\n  A --> B\n"]
 
 
 # --- Lists ---
@@ -216,6 +227,11 @@ def test_convert_banner_prepended():
 def test_convert_collects_images():
     result = convert("![fig](images/fig.png)\n", "docs/arch.md", "sha")
     assert result.images == ["docs/images/fig.png"]
+
+def test_convert_collects_mermaid():
+    result = convert("```mermaid\ngraph TD\n```\n", "docs/arch.md", "sha")
+    assert result.mermaid_blocks == ["graph TD\n"]
+    assert 'mermaid-0.png' in result.body
 
 def test_convert_no_images_on_external():
     result = convert("![fig](https://example.com/fig.png)\n", "docs/arch.md", "sha")

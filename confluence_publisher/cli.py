@@ -63,8 +63,9 @@ def main():
     help="Specific files to publish (relative paths). Publishes all manifest entries if omitted.",
 )
 @click.option("--dry-run", is_flag=True, help="Convert and log without calling the Confluence API.")
+@click.option("--strict-conflicts", is_flag=True, help="Treat edit conflicts as errors (exit non-zero).")
 @click.option("--repo-root", default=".", show_default=True, help="Repository root directory.")
-def sync(changed_files: tuple[str, ...], dry_run: bool, repo_root: str):
+def sync(changed_files: tuple[str, ...], dry_run: bool, strict_conflicts: bool, repo_root: str):
     """Publish changed Markdown files to Confluence."""
     root = Path(repo_root).resolve()
     manifest = load_manifest(root)
@@ -85,6 +86,7 @@ def sync(changed_files: tuple[str, ...], dry_run: bool, repo_root: str):
         commit_sha=commit_sha,
         repo_root=root,
         dry_run=dry_run,
+        strict_conflicts=strict_conflicts,
     )
 
     for result in summary.results:

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -41,6 +45,34 @@ class PublishSummary:
         return len(self.errors) == 0
 
 
+def _render_mermaid(source: str, index: int) -> bytes | None:
+    """Render a Mermaid diagram to PNG via mmdc. Returns None if mmdc is not installed."""
+    if not shutil.which("mmdc"):
+        logger.warning(
+            "mmdc not found — mermaid diagram %d will not render. "
+            "Install @mermaid-js/mermaid-cli to enable rendering.",
+            index,
+        )
+        return None
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src = Path(tmpdir) / "diagram.mmd"
+        out = Path(tmpdir) / "diagram.png"
+        src.write_text(source, encoding="utf-8")
+        cmd = ["mmdc", "-i", str(src), "-o", str(out), "--backgroundColor", "white"]
+        puppeteer_cfg = os.environ.get("MMDC_PUPPETEER_CFG")
+        if puppeteer_cfg:
+            cmd += ["--puppeteerConfigFile", puppeteer_cfg]
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+        if proc.returncode != 0:
+            logger.warning(
+                "mmdc failed for diagram %d: %s",
+                index,
+                proc.stderr.decode(errors="replace"),
+            )
+            return None
+        return out.read_bytes()
+
+
 def _upload_images(
     client: ConfluenceClient,
     page_id: str,
@@ -65,6 +97,28 @@ def _upload_images(
             logger.warning("Failed to upload image '%s': %s", rel_path, exc)
 
 
+def _upload_mermaid(
+    client: ConfluenceClient,
+    page_id: str,
+    mermaid_blocks: list[str],
+) -> None:
+    for idx, source in enumerate(mermaid_blocks):
+        png = _render_mermaid(source, idx)
+        if png is None:
+            continue
+        filename = f"mermaid-{idx}.png"
+        try:
+            client.upload_attachment(
+                page_id=page_id,
+                filename=filename,
+                data=png,
+                mime_type="image/png",
+            )
+            logger.info("Uploaded mermaid diagram %d to page %s", idx, page_id)
+        except Exception as exc:
+            logger.warning("Failed to upload mermaid diagram %d: %s", idx, exc)
+
+
 def publish_pages(
     manifest: Manifest,
     changed_files: list[str],
@@ -72,6 +126,7 @@ def publish_pages(
     commit_sha: str,
     repo_root: Path,
     dry_run: bool = False,
+    strict_conflicts: bool = False,
 ) -> PublishSummary:
     summary = PublishSummary()
 
@@ -138,6 +193,7 @@ def publish_pages(
 
             entry.page_id = page_id
             _upload_images(client, page_id, result.images, repo_root)
+            _upload_mermaid(client, page_id, result.mermaid_blocks)
 
             entry.last_published_hash = content_hash(result.body)
             entry.last_published_version = 1
@@ -183,23 +239,33 @@ def publish_pages(
             entry.last_published_version is not None
             and current_version > entry.last_published_version
         ):
-            logger.warning(
-                "Manual edit detected on '%s' (Confluence version %d, last published %d). "
-                "Overwriting with GitHub content.",
-                file_path,
-                current_version,
-                entry.last_published_version,
+            conflict_msg = (
+                f"Confluence version {current_version} > "
+                f"last published {entry.last_published_version}"
             )
-            summary.results.append(PageResult(
-                file_path=file_path,
-                status="conflict_warned",
-                message=(
-                    f"Confluence version {current_version} > "
-                    f"last published {entry.last_published_version}"
-                ),
-            ))
+            if strict_conflicts:
+                logger.error(
+                    "Conflict on '%s' (%s) — overwriting with GitHub content.",
+                    file_path, conflict_msg,
+                )
+                summary.results.append(PageResult(
+                    file_path=file_path,
+                    status="error",
+                    message=f"Conflict: {conflict_msg}",
+                ))
+            else:
+                logger.warning(
+                    "Manual edit detected on '%s' (%s) — overwriting with GitHub content.",
+                    file_path, conflict_msg,
+                )
+                summary.results.append(PageResult(
+                    file_path=file_path,
+                    status="conflict_warned",
+                    message=conflict_msg,
+                ))
 
         _upload_images(client, entry.page_id, result.images, repo_root)
+        _upload_mermaid(client, entry.page_id, result.mermaid_blocks)
 
         new_version = current_version + 1
         try:

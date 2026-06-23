@@ -18,9 +18,10 @@ class ConversionError(Exception):
 
 @dataclass
 class ConversionResult:
-    body: str                         # without banner, used for content hashing
-    full_body: str                    # banner + body, what gets published
-    images: list[str] = field(default_factory=list)  # repo-root-relative paths of local images
+    body: str                           # without banner, used for content hashing
+    full_body: str                      # banner + body, what gets published
+    images: list[str] = field(default_factory=list)         # repo-root-relative paths of local images
+    mermaid_blocks: list[str] = field(default_factory=list) # source of each mermaid diagram in order
 
 
 class ConfluenceRenderer(BaseRenderer):
@@ -35,6 +36,7 @@ class ConfluenceRenderer(BaseRenderer):
         self._page_id_map = page_id_map or {}
         self._source_dir = str(PurePosixPath(source_path).parent)
         self.images: list[str] = []
+        self.mermaid_blocks: list[str] = []
 
     def render(self, token):
         node_type = type(token).__name__
@@ -68,9 +70,9 @@ class ConfluenceRenderer(BaseRenderer):
         code = token.children[0].content if token.children else ""
         language = getattr(token, "language", "") or ""
         if language == "mermaid":
-            raise ConversionError(
-                f"Mermaid diagrams are not supported until Phase 3 ('{self.source_path}')."
-            )
+            idx = len(self.mermaid_blocks)
+            self.mermaid_blocks.append(code)
+            return f'<ac:image><ri:attachment ri:filename="mermaid-{idx}.png"/></ac:image>'
         lang_param = (
             f'<ac:parameter ac:name="language">{_escape(language)}</ac:parameter>'
             if language
@@ -247,5 +249,11 @@ def convert(
         doc = Document(text)
         body = renderer.render(doc)
         images = list(renderer.images)
+        mermaid_blocks = list(renderer.mermaid_blocks)
     banner = build_banner(source_path, commit_sha)
-    return ConversionResult(body=body, full_body=banner + body, images=images)
+    return ConversionResult(
+        body=body,
+        full_body=banner + body,
+        images=images,
+        mermaid_blocks=mermaid_blocks,
+    )

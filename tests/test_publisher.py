@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from confluence_publisher.manifest import load_manifest, Manifest
-from confluence_publisher.publisher import check_pages, publish_pages, PublishSummary
+from confluence_publisher.publisher import check_pages, publish_pages, PublishSummary, _render_mermaid
 
 
 MANIFEST_DATA = {
@@ -241,6 +241,33 @@ def test_images_uploaded_on_publish(tmp_path):
     assert kwargs["data"] == b"\x89PNG"
 
 
+def test_mermaid_uploaded_on_publish(tmp_path):
+    root, manifest = make_repo(tmp_path)
+    (tmp_path / "docs/arch.md").write_text("```mermaid\ngraph TD\n  A --> B\n```\n")
+    client = make_client()
+
+    with patch("confluence_publisher.publisher._render_mermaid", return_value=b"\x89PNG") as mock_render:
+        publish_pages(manifest, ["docs/arch.md"], client, "sha", root)
+
+    mock_render.assert_called_once_with("graph TD\n  A --> B\n", 0)
+    client.upload_attachment.assert_called_once()
+    _, kwargs = client.upload_attachment.call_args
+    assert kwargs["filename"] == "mermaid-0.png"
+    assert kwargs["mime_type"] == "image/png"
+
+
+def test_mermaid_skipped_when_mmdc_missing(tmp_path):
+    root, manifest = make_repo(tmp_path)
+    (tmp_path / "docs/arch.md").write_text("```mermaid\ngraph TD\n```\n")
+    client = make_client()
+
+    with patch("confluence_publisher.publisher._render_mermaid", return_value=None):
+        summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", root)
+
+    assert summary.succeeded
+    client.upload_attachment.assert_not_called()
+
+
 def test_missing_image_does_not_fail_publish(tmp_path):
     root, manifest = make_repo(tmp_path)
     (tmp_path / "docs/arch.md").write_text("![missing](images/missing.png)\n")
@@ -250,6 +277,55 @@ def test_missing_image_does_not_fail_publish(tmp_path):
 
     assert summary.succeeded
     client.upload_attachment.assert_not_called()
+
+
+# --- Strict conflicts ---
+
+def test_strict_conflicts_fails_build(tmp_path):
+    root, manifest = make_repo(tmp_path)
+    client = make_client(version=5)
+    publish_pages(manifest, ["docs/arch.md"], client, "sha1", root)
+    # Simulate manual Confluence edit (version jumped)
+    client.get_page.return_value = {"version": 8, "body": "<p>manual</p>"}
+    (tmp_path / "docs/arch.md").write_text("# Updated\n")
+    manifest2 = load_manifest(tmp_path)
+
+    summary = publish_pages(
+        manifest2, ["docs/arch.md"], client, "sha2", root, strict_conflicts=True
+    )
+
+    assert not summary.succeeded
+    assert any(r.status == "error" and "Conflict" in r.message for r in summary.results)
+
+
+def test_strict_conflicts_still_updates_page(tmp_path):
+    root, manifest = make_repo(tmp_path)
+    client = make_client(version=5)
+    publish_pages(manifest, ["docs/arch.md"], client, "sha1", root)
+    client.get_page.return_value = {"version": 8, "body": "<p>manual</p>"}
+    (tmp_path / "docs/arch.md").write_text("# Updated\n")
+    manifest2 = load_manifest(tmp_path)
+
+    publish_pages(manifest2, ["docs/arch.md"], client, "sha2", root, strict_conflicts=True)
+
+    # Page is still updated despite the conflict error
+    client.update_page.assert_called()
+
+
+def test_no_conflict_no_strict_error(tmp_path):
+    root, manifest = make_repo(tmp_path)
+    client = make_client(version=5)
+    publish_pages(manifest, ["docs/arch.md"], client, "sha1", root)
+    # No manual edit — version is exactly what we published
+    client.get_page.return_value = {"version": 6, "body": "<p>old</p>"}
+    (tmp_path / "docs/arch.md").write_text("# Updated\n")
+    manifest2 = load_manifest(tmp_path)
+
+    summary = publish_pages(
+        manifest2, ["docs/arch.md"], client, "sha2", root, strict_conflicts=True
+    )
+
+    assert summary.succeeded
 
 
 # --- Dry run ---
@@ -269,6 +345,43 @@ def test_dry_run_does_not_save_manifest(tmp_path):
     with patch("confluence_publisher.publisher.save_manifest") as mock_save:
         publish_pages(manifest, ["docs/arch.md"], client, "sha", root, dry_run=True)
         mock_save.assert_not_called()
+
+
+# --- _render_mermaid ---
+
+def test_render_mermaid_returns_none_when_mmdc_missing():
+    with patch("confluence_publisher.publisher.shutil.which", return_value=None):
+        result = _render_mermaid("graph TD\n  A --> B", 0)
+    assert result is None
+
+
+def test_render_mermaid_calls_mmdc(tmp_path):
+    with patch("confluence_publisher.publisher.shutil.which", return_value="/usr/bin/mmdc"):
+        with patch("confluence_publisher.publisher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            # Write a fake PNG so read_bytes() works
+            with patch("confluence_publisher.publisher.tempfile.TemporaryDirectory") as mock_tmpdir:
+                mock_tmpdir.return_value.__enter__ = lambda s: str(tmp_path)
+                mock_tmpdir.return_value.__exit__ = MagicMock(return_value=False)
+                (tmp_path / "diagram.png").write_bytes(b"\x89PNG")
+                result = _render_mermaid("graph TD", 0)
+
+    assert result == b"\x89PNG"
+    cmd = mock_run.call_args[0][0]
+    assert "mmdc" in cmd
+    assert "--backgroundColor" in cmd
+
+
+def test_render_mermaid_returns_none_on_mmdc_failure(tmp_path):
+    with patch("confluence_publisher.publisher.shutil.which", return_value="/usr/bin/mmdc"):
+        with patch("confluence_publisher.publisher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stderr=b"error")
+            with patch("confluence_publisher.publisher.tempfile.TemporaryDirectory") as mock_tmpdir:
+                mock_tmpdir.return_value.__enter__ = lambda s: str(tmp_path)
+                mock_tmpdir.return_value.__exit__ = MagicMock(return_value=False)
+                result = _render_mermaid("graph TD", 0)
+
+    assert result is None
 
 
 # --- check_pages ---

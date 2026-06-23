@@ -4,10 +4,16 @@ on:
   push:
     branches: [main]
     paths: ["docs/**/*.md"]
+  schedule:
+    - cron: '0 7 * * 1-5'   # Mon-Fri 07:00 UTC — nightly validate-manifest run
   workflow_dispatch:
     inputs:
       sync_all:
         description: "Sync all manifest entries (not just changed files)"
+        type: boolean
+        default: false
+      validate_only:
+        description: "Run validate-manifest only (skip publish)"
         type: boolean
         default: false
 
@@ -18,6 +24,7 @@ jobs:
   check:
     name: Validate syntax
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.validate_only)
     steps:
       - uses: actions/checkout@v7
 
@@ -47,6 +54,11 @@ jobs:
       - name: Install
         run: pip install -e .
 
+      - name: Install Mermaid CLI
+        run: |
+          npm install -g @mermaid-js/mermaid-cli
+          echo '{"args":["--no-sandbox"]}' > /tmp/puppeteer-config.json
+
       - name: Resolve changed files
         id: changed
         run: |
@@ -64,6 +76,7 @@ jobs:
           CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
           CONFLUENCE_CERT_PEM: ${{ secrets.CONFLUENCE_CERT_PEM }}
           CONFLUENCE_EMAIL: ${{ vars.CONFLUENCE_EMAIL }}
+          MMDC_PUPPETEER_CFG: /tmp/puppeteer-config.json
         run: |
           if [ -z "${{ steps.changed.outputs.files }}" ]; then
             confluence-publisher sync
@@ -78,3 +91,26 @@ jobs:
           git add confluence-manifest.yaml
           git diff --cached --quiet || git commit -m "chore: update confluence-manifest state [skip ci]"
           git push
+
+  validate:
+    name: Validate manifest
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.validate_only)
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Validate manifest
+        env:
+          CONFLUENCE_BASE_URL: ${{ vars.CONFLUENCE_BASE_URL }}
+          CONFLUENCE_MODE: ${{ vars.CONFLUENCE_MODE }}
+          CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_CERT_PEM: ${{ secrets.CONFLUENCE_CERT_PEM }}
+          CONFLUENCE_EMAIL: ${{ vars.CONFLUENCE_EMAIL }}
+        run: confluence-publisher validate-manifest
