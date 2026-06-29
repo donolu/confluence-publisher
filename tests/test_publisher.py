@@ -1,12 +1,14 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 
-from confluence_publisher.manifest import load_manifest, Manifest
-from confluence_publisher.publisher import check_pages, publish_pages, PublishSummary, _render_mermaid
-
+from confluence_publisher.manifest import Manifest, load_manifest
+from confluence_publisher.publisher import (
+    _render_mermaid,
+    check_pages,
+    publish_pages,
+)
 
 MANIFEST_DATA = {
     "version": 1,
@@ -19,9 +21,7 @@ MANIFEST_DATA = {
 
 
 def make_repo(tmp_path: Path, files: dict[str, str] | None = None) -> tuple[Path, Manifest]:
-    (tmp_path / "confluence-manifest.yaml").write_text(
-        yaml.dump(MANIFEST_DATA, sort_keys=False)
-    )
+    (tmp_path / "confluence-manifest.yaml").write_text(yaml.dump(MANIFEST_DATA, sort_keys=False))
     docs = tmp_path / "docs"
     docs.mkdir()
     default_files = {
@@ -42,6 +42,7 @@ def make_client(version: int = 5) -> MagicMock:
 
 
 # --- Publish flow ---
+
 
 def test_publish_calls_update_page(tmp_path):
     root, manifest = make_repo(tmp_path)
@@ -141,6 +142,7 @@ def test_api_error_is_error(tmp_path):
 
 # --- Auto page creation ---
 
+
 def test_auto_create_when_no_page_id(tmp_path):
     data = {
         "version": 1,
@@ -227,7 +229,10 @@ def test_auto_create_with_images_uses_placeholder_then_updates(tmp_path):
     # create_page must use a safe placeholder body (no attachment references)
     _, create_kwargs = client.create_page.call_args
     assert "ri:attachment" not in create_kwargs["body"]
-    assert "in progress" in create_kwargs["body"].lower() or "momentarily" in create_kwargs["body"].lower()
+    assert (
+        "in progress" in create_kwargs["body"].lower()
+        or "momentarily" in create_kwargs["body"].lower()
+    )
     # attachment uploaded
     client.upload_attachment.assert_called_once()
     # update_page called with full body containing the attachment ref
@@ -399,6 +404,7 @@ def test_auto_create_dry_run_does_not_call_api(tmp_path):
 
 # --- Image upload ---
 
+
 def test_images_uploaded_on_publish(tmp_path):
     root, manifest = make_repo(tmp_path)
     img_dir = tmp_path / "docs" / "images"
@@ -421,7 +427,9 @@ def test_mermaid_uploaded_on_publish(tmp_path):
     client = make_client()
 
     with patch("confluence_publisher.publisher.shutil.which", return_value="/usr/bin/mmdc"):
-        with patch("confluence_publisher.publisher._render_mermaid", return_value=b"\x89PNG") as mock_render:
+        with patch(
+            "confluence_publisher.publisher._render_mermaid", return_value=b"\x89PNG"
+        ) as mock_render:
             summary = publish_pages(manifest, ["docs/arch.md"], client, "sha", root)
 
     assert summary.succeeded
@@ -461,6 +469,7 @@ def test_missing_image_fails_publish(tmp_path):
 
 
 # --- Strict conflicts ---
+
 
 def test_strict_conflicts_fails_build(tmp_path):
     root, manifest = make_repo(tmp_path)
@@ -511,6 +520,7 @@ def test_no_conflict_no_strict_error(tmp_path):
 
 # --- Dry run ---
 
+
 def test_dry_run_does_not_call_api(tmp_path):
     root, manifest = make_repo(tmp_path)
     client = make_client()
@@ -529,6 +539,7 @@ def test_dry_run_does_not_save_manifest(tmp_path):
 
 
 # --- _render_mermaid ---
+
 
 def test_render_mermaid_returns_none_when_mmdc_missing():
     with patch("confluence_publisher.publisher.shutil.which", return_value=None):
@@ -566,6 +577,7 @@ def test_render_mermaid_returns_none_on_mmdc_failure(tmp_path):
 
 
 # --- check_pages ---
+
 
 def test_check_pages_valid(tmp_path):
     root, manifest = make_repo(tmp_path)

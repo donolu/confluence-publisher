@@ -5,7 +5,6 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-import mistletoe
 from mistletoe import Document
 from mistletoe.base_renderer import BaseRenderer
 
@@ -18,10 +17,12 @@ class ConversionError(Exception):
 
 @dataclass
 class ConversionResult:
-    body: str                           # without banner, used for content hashing
-    full_body: str                      # banner + body, what gets published
-    images: list[str] = field(default_factory=list)         # repo-root-relative paths of local images
-    mermaid_blocks: list[str] = field(default_factory=list) # source of each mermaid diagram in order
+    body: str  # without banner, used for content hashing
+    full_body: str  # banner + body, what gets published
+    images: list[str] = field(default_factory=list)  # repo-root-relative paths of local images
+    mermaid_blocks: list[str] = field(
+        default_factory=list
+    )  # source of each mermaid diagram in order
 
 
 class ConfluenceRenderer(BaseRenderer):
@@ -95,17 +96,13 @@ class ConfluenceRenderer(BaseRenderer):
     def render_table(self, token):
         header_row = f"<tr>{self._render_row(token.header, header=True)}</tr>"
         body_rows = "".join(
-            f"<tr>{self._render_row(row, header=False)}</tr>"
-            for row in token.children
+            f"<tr>{self._render_row(row, header=False)}</tr>" for row in token.children
         )
         return f"<table><tbody>{header_row}{body_rows}</tbody></table>"
 
     def _render_row(self, row, header: bool) -> str:
         tag = "th" if header else "td"
-        return "".join(
-            f"<{tag}><p>{self.render_inner(cell)}</p></{tag}>"
-            for cell in row.children
-        )
+        return "".join(f"<{tag}><p>{self.render_inner(cell)}</p></{tag}>" for cell in row.children)
 
     def render_table_row(self, token):
         return ""
@@ -186,8 +183,7 @@ class ConfluenceRenderer(BaseRenderer):
 
     def render_html_span(self, token):
         raise ConversionError(
-            f"Inline HTML is not supported ('{self.source_path}'). "
-            f"Remove or convert to Markdown."
+            f"Inline HTML is not supported ('{self.source_path}'). Remove or convert to Markdown."
         )
 
 
@@ -197,11 +193,7 @@ def _escape(text: str) -> str:
 
 def _escape_attr(text: str) -> str:
     return (
-        text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 

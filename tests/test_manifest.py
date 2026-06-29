@@ -1,9 +1,9 @@
-import pytest
 from pathlib import Path
+
+import pytest
 import yaml
 
-from confluence_publisher.manifest import load_manifest, save_manifest, Manifest
-
+from confluence_publisher.manifest import load_manifest, save_manifest
 
 VALID_MANIFEST = {
     "version": 1,

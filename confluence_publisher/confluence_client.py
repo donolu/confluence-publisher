@@ -5,6 +5,7 @@ import base64
 import logging
 import os
 import tempfile
+from typing import Any
 
 import requests
 from tenacity import (
@@ -44,7 +45,9 @@ class ConfluenceClient:
         self._session = self._build_session(token, email, pem_path)
         self._space_id_cache: dict[str, str] = {}
 
-    def _build_session(self, token: str, email: str | None, pem_path: str | None) -> requests.Session:
+    def _build_session(
+        self, token: str, email: str | None, pem_path: str | None
+    ) -> requests.Session:
         session = requests.Session()
         if self.mode == "dc":
             session.headers["Authorization"] = f"Bearer {token}"
@@ -68,7 +71,7 @@ class ConfluenceClient:
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
-    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def _request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
         kwargs.setdefault("timeout", 30)
         response = self._session.request(method, url, **kwargs)
         if response.status_code == 429 or response.status_code >= 500:
@@ -81,7 +84,7 @@ class ConfluenceClient:
 
     # --- Page read / write ---
 
-    def get_page(self, page_id: str) -> dict:
+    def get_page(self, page_id: str) -> dict[str, Any]:
         if self.mode == "dc":
             url = self._url(f"{page_id}?expand=version,body.storage")
             data = self._request("GET", url).json()
@@ -105,7 +108,7 @@ class ConfluenceClient:
         body: str,
         version: int,
         commit_sha: str = "",
-    ) -> dict:
+    ) -> dict[str, Any]:
         if self.mode == "dc":
             url = self._url(str(page_id))
             payload = {
@@ -123,13 +126,14 @@ class ConfluenceClient:
                 "title": title,
                 "body": {"representation": "storage", "value": body},
             }
-        return self._request("PUT", url, json=payload).json()
+        result: dict[str, Any] = self._request("PUT", url, json=payload).json()
+        return result
 
     def create_page(self, title: str, space_key: str, parent_id: str, body: str) -> str:
         """Create a new page and return its page ID."""
         if self.mode == "dc":
             url = f"{self.base_url}/rest/api/content"
-            payload: dict = {
+            payload: dict[str, Any] = {
                 "type": "page",
                 "title": title,
                 "space": {"key": space_key},

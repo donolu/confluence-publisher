@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import yaml
 
@@ -13,17 +13,17 @@ class PageEntry:
     page_id: str
     space_id: str
     title: str
-    parent_id: Optional[str] = None
-    last_published_hash: Optional[str] = None
-    last_published_version: Optional[int] = None
-    last_published_commit: Optional[str] = None
+    parent_id: str | None = None
+    last_published_hash: str | None = None
+    last_published_version: int | None = None
+    last_published_commit: str | None = None
 
 
 @dataclass
 class Manifest:
     path: Path
     version: int
-    defaults: dict
+    defaults: dict[str, Any]
     pages: dict[str, PageEntry]
 
 
@@ -49,8 +49,7 @@ def load_manifest(repo_root: Path) -> Manifest:
         if page_id:
             if page_id in seen_ids:
                 raise ValueError(
-                    f"Duplicate page_id '{page_id}': "
-                    f"'{file_path}' and '{seen_ids[page_id]}'"
+                    f"Duplicate page_id '{page_id}': '{file_path}' and '{seen_ids[page_id]}'"
                 )
             seen_ids[page_id] = file_path
 
@@ -82,7 +81,7 @@ def save_manifest(manifest: Manifest) -> None:
         if page_data is None:
             continue
         if entry.page_id is not None:
-            page_data["page_id"] = entry.page_id   # persist auto-created page IDs
+            page_data["page_id"] = entry.page_id  # persist auto-created page IDs
         if entry.last_published_hash is not None:
             page_data["last_published_hash"] = entry.last_published_hash
         if entry.last_published_version is not None:

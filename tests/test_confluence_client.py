@@ -27,11 +27,14 @@ def mock_response(status: int = 200, json_data: dict | None = None) -> MagicMock
 
 # --- create_page (Cloud) ---
 
+
 def test_create_page_cloud_calls_v2(tmp_path):
     client = make_client("cloud")
     client._space_id_cache["MYSPACE"] = "123"
 
-    with patch.object(client, "_request", return_value=mock_response(200, {"id": "456"})) as mock_req:
+    with patch.object(
+        client, "_request", return_value=mock_response(200, {"id": "456"})
+    ) as mock_req:
         page_id = client.create_page("My Page", "MYSPACE", "100", "<p>body</p>")
 
     assert page_id == "456"
@@ -48,7 +51,9 @@ def test_create_page_cloud_no_parent(tmp_path):
     client = make_client("cloud")
     client._space_id_cache["MYSPACE"] = "123"
 
-    with patch.object(client, "_request", return_value=mock_response(200, {"id": "456"})) as mock_req:
+    with patch.object(
+        client, "_request", return_value=mock_response(200, {"id": "456"})
+    ) as mock_req:
         client.create_page("My Page", "MYSPACE", "", "<p>body</p>")
 
     payload = mock_req.call_args[1]["json"]
@@ -58,7 +63,9 @@ def test_create_page_cloud_no_parent(tmp_path):
 def test_create_page_dc_calls_v1():
     client = make_client("dc")
 
-    with patch.object(client, "_request", return_value=mock_response(200, {"id": "789"})) as mock_req:
+    with patch.object(
+        client, "_request", return_value=mock_response(200, {"id": "789"})
+    ) as mock_req:
         page_id = client.create_page("DC Page", "DCSPACE", "50", "<p>body</p>")
 
     assert page_id == "789"
@@ -72,7 +79,9 @@ def test_create_page_dc_calls_v1():
 def test_create_page_dc_no_parent():
     client = make_client("dc")
 
-    with patch.object(client, "_request", return_value=mock_response(200, {"id": "789"})) as mock_req:
+    with patch.object(
+        client, "_request", return_value=mock_response(200, {"id": "789"})
+    ) as mock_req:
         client.create_page("DC Page", "DCSPACE", "", "<p>body</p>")
 
     payload = mock_req.call_args[1]["json"]
@@ -80,6 +89,7 @@ def test_create_page_dc_no_parent():
 
 
 # --- _resolve_space_id ---
+
 
 def test_resolve_space_id_cached():
     client = make_client("cloud")
@@ -95,9 +105,11 @@ def test_resolve_space_id_cached():
 def test_resolve_space_id_fetches_and_caches():
     client = make_client("cloud")
 
-    with patch.object(client, "_request", return_value=mock_response(200, {
-        "results": [{"id": "456", "key": "MYSPACE"}]
-    })) as mock_req:
+    with patch.object(
+        client,
+        "_request",
+        return_value=mock_response(200, {"results": [{"id": "456", "key": "MYSPACE"}]}),
+    ) as mock_req:
         sid = client._resolve_space_id("MYSPACE")
 
     assert sid == "456"
@@ -115,6 +127,7 @@ def test_resolve_space_id_not_found():
 
 # --- upload_attachment ---
 
+
 def test_upload_attachment_cloud():
     client = make_client("cloud")
 
@@ -123,7 +136,7 @@ def test_upload_attachment_cloud():
         client.upload_attachment("123", "fig.png", b"\x89PNG", "image/png")
 
     mock_req.assert_called_once()
-    url = mock_req.call_args[0][1]   # _request("POST", url, ...)
+    url = mock_req.call_args[0][1]  # _request("POST", url, ...)
     # Cloud must use the v1 content endpoint; v2 /wiki/api/v2/pages/{id}/attachments is GET-only.
     assert "/wiki/rest/api/content/123/child/attachment" in url
     assert "/wiki/api/v2" not in url
@@ -171,6 +184,7 @@ def test_upload_attachment_raises_on_error():
 
 # --- get_page ---
 
+
 def test_get_page_cloud():
     client = make_client("cloud")
     resp_data = {
@@ -198,6 +212,7 @@ def test_get_page_dc():
 
 
 # --- page_exists ---
+
 
 def test_page_exists_true():
     client = make_client("cloud")

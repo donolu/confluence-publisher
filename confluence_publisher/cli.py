@@ -26,10 +26,14 @@ def _build_client() -> ConfluenceClient:
     email = os.environ.get("CONFLUENCE_EMAIL")
     cert_pem_b64 = os.environ.get("CONFLUENCE_CERT_PEM")
 
-    missing = [k for k, v in [
-        ("CONFLUENCE_BASE_URL", base_url),
-        ("CONFLUENCE_API_TOKEN", token),
-    ] if not v]
+    missing = [
+        k
+        for k, v in [
+            ("CONFLUENCE_BASE_URL", base_url),
+            ("CONFLUENCE_API_TOKEN", token),
+        ]
+        if not v
+    ]
     if missing:
         raise click.ClickException(f"Missing required env vars: {', '.join(missing)}")
 
@@ -44,9 +48,7 @@ def _build_client() -> ConfluenceClient:
 
 def _get_commit_sha() -> str:
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], text=True
-        ).strip()
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
     except Exception:
         return os.environ.get("GITHUB_SHA", "unknown")[:7]
 

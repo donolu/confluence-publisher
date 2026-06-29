@@ -8,10 +8,9 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from .confluence_client import ConfluenceClient
-from .converter import ConversionError, ConversionResult, content_hash, convert
+from .converter import ConversionError, content_hash, convert
 from .manifest import Manifest, save_manifest
 
 logger = logging.getLogger(__name__)
@@ -135,7 +134,7 @@ def _upload_mermaid(
 def publish_pages(
     manifest: Manifest,
     changed_files: list[str],
-    client: Optional[ConfluenceClient],
+    client: ConfluenceClient | None,
     commit_sha: str,
     repo_root: Path,
     dry_run: bool = False,
@@ -144,11 +143,7 @@ def publish_pages(
     summary = PublishSummary()
 
     # Build lookup map for internal link rewriting
-    page_id_map = {
-        fp: entry.page_id
-        for fp, entry in manifest.pages.items()
-        if entry.page_id
-    }
+    page_id_map = {fp: entry.page_id for fp, entry in manifest.pages.items() if entry.page_id}
 
     for file_path in changed_files:
         entry = manifest.pages.get(file_path)
@@ -158,22 +153,26 @@ def publish_pages(
 
         full_path = repo_root / file_path
         if not full_path.exists():
-            summary.results.append(PageResult(
-                file_path=file_path,
-                status="error",
-                message=f"File does not exist on disk: {full_path}",
-            ))
+            summary.results.append(
+                PageResult(
+                    file_path=file_path,
+                    status="error",
+                    message=f"File does not exist on disk: {full_path}",
+                )
+            )
             continue
 
         try:
             text = full_path.read_text(encoding="utf-8")
             result = convert(text, file_path, commit_sha, page_id_map=page_id_map)
         except ConversionError as exc:
-            summary.results.append(PageResult(
-                file_path=file_path,
-                status="error",
-                message=str(exc),
-            ))
+            summary.results.append(
+                PageResult(
+                    file_path=file_path,
+                    status="error",
+                    message=str(exc),
+                )
+            )
             continue
 
         # Pre-flight: verify all local images exist before making any API call.
@@ -182,22 +181,26 @@ def publish_pages(
             missing_images = [p for p in result.images if not (repo_root / p).exists()]
             if missing_images:
                 for p in missing_images:
-                    summary.results.append(PageResult(
-                        file_path=file_path,
-                        status="error",
-                        message=f"Local image not found on disk: {p}",
-                    ))
+                    summary.results.append(
+                        PageResult(
+                            file_path=file_path,
+                            status="error",
+                            message=f"Local image not found on disk: {p}",
+                        )
+                    )
                 continue
 
         # --- Auto-create new pages ---
         if not entry.page_id:
             if dry_run:
                 logger.info("[dry-run] Would create page for '%s'", file_path)
-                summary.results.append(PageResult(
-                    file_path=file_path,
-                    status="published",
-                    message="dry-run (would create)",
-                ))
+                summary.results.append(
+                    PageResult(
+                        file_path=file_path,
+                        status="published",
+                        message="dry-run (would create)",
+                    )
+                )
                 continue
 
             has_attachments = bool(result.images or result.mermaid_blocks)
@@ -221,11 +224,13 @@ def publish_pages(
                     body=initial_body,
                 )
             except Exception as exc:
-                summary.results.append(PageResult(
-                    file_path=file_path,
-                    status="error",
-                    message=f"Failed to create page: {exc}",
-                ))
+                summary.results.append(
+                    PageResult(
+                        file_path=file_path,
+                        status="error",
+                        message=f"Failed to create page: {exc}",
+                    )
+                )
                 continue
 
             # Save page_id before touching attachments so reruns skip creation.
@@ -235,18 +240,19 @@ def publish_pages(
             page_id_map[file_path] = page_id
 
             if has_attachments:
-                upload_errors = (
-                    _upload_images(client, page_id, result.images, repo_root)
-                    + _upload_mermaid(client, page_id, result.mermaid_blocks)
-                )
+                upload_errors = _upload_images(
+                    client, page_id, result.images, repo_root
+                ) + _upload_mermaid(client, page_id, result.mermaid_blocks)
                 if upload_errors:
                     for msg in upload_errors:
                         logger.error("Attachment error on '%s': %s", file_path, msg)
-                        summary.results.append(PageResult(
-                            file_path=file_path,
-                            status="error",
-                            message=msg,
-                        ))
+                        summary.results.append(
+                            PageResult(
+                                file_path=file_path,
+                                status="error",
+                                message=msg,
+                            )
+                        )
                     # Page exists with safe placeholder; next run retries via update path.
                     continue
 
@@ -259,11 +265,13 @@ def publish_pages(
                         commit_sha=commit_sha,
                     )
                 except Exception as exc:
-                    summary.results.append(PageResult(
-                        file_path=file_path,
-                        status="error",
-                        message=f"Failed to update new page body after attachment upload: {exc}",
-                    ))
+                    summary.results.append(
+                        PageResult(
+                            file_path=file_path,
+                            status="error",
+                            message=f"Failed to update new page body after attachment upload: {exc}",
+                        )
+                    )
                     continue
 
                 entry.last_published_version = 2
@@ -274,11 +282,13 @@ def publish_pages(
             entry.last_published_commit = commit_sha
 
             logger.info("Created '%s' -> page %s", file_path, page_id)
-            summary.results.append(PageResult(
-                file_path=file_path,
-                status="published",
-                message="created",
-            ))
+            summary.results.append(
+                PageResult(
+                    file_path=file_path,
+                    status="published",
+                    message="created",
+                )
+            )
             continue
 
         # --- Update existing page ---
@@ -290,21 +300,25 @@ def publish_pages(
 
         if dry_run:
             logger.info("[dry-run] Would publish '%s'", file_path)
-            summary.results.append(PageResult(
-                file_path=file_path,
-                status="published",
-                message="dry-run",
-            ))
+            summary.results.append(
+                PageResult(
+                    file_path=file_path,
+                    status="published",
+                    message="dry-run",
+                )
+            )
             continue
 
         try:
             current = client.get_page(entry.page_id)
         except Exception as exc:
-            summary.results.append(PageResult(
-                file_path=file_path,
-                status="error",
-                message=f"Failed to fetch page {entry.page_id}: {exc}",
-            ))
+            summary.results.append(
+                PageResult(
+                    file_path=file_path,
+                    status="error",
+                    message=f"Failed to fetch page {entry.page_id}: {exc}",
+                )
+            )
             continue
 
         current_version = current["version"]
@@ -320,37 +334,44 @@ def publish_pages(
             if strict_conflicts:
                 logger.error(
                     "Conflict on '%s' (%s) — overwriting with GitHub content.",
-                    file_path, conflict_msg,
+                    file_path,
+                    conflict_msg,
                 )
-                summary.results.append(PageResult(
-                    file_path=file_path,
-                    status="error",
-                    message=f"Conflict: {conflict_msg}",
-                ))
+                summary.results.append(
+                    PageResult(
+                        file_path=file_path,
+                        status="error",
+                        message=f"Conflict: {conflict_msg}",
+                    )
+                )
             else:
                 logger.warning(
                     "Manual edit detected on '%s' (%s) — overwriting with GitHub content.",
-                    file_path, conflict_msg,
+                    file_path,
+                    conflict_msg,
                 )
-                summary.results.append(PageResult(
-                    file_path=file_path,
-                    status="conflict_warned",
-                    message=conflict_msg,
-                ))
+                summary.results.append(
+                    PageResult(
+                        file_path=file_path,
+                        status="conflict_warned",
+                        message=conflict_msg,
+                    )
+                )
 
         # Upload attachments before updating the page body so references resolve immediately
-        upload_errors = (
-            _upload_images(client, entry.page_id, result.images, repo_root)
-            + _upload_mermaid(client, entry.page_id, result.mermaid_blocks)
-        )
+        upload_errors = _upload_images(
+            client, entry.page_id, result.images, repo_root
+        ) + _upload_mermaid(client, entry.page_id, result.mermaid_blocks)
         if upload_errors:
             for msg in upload_errors:
                 logger.error("Attachment error on '%s': %s", file_path, msg)
-                summary.results.append(PageResult(
-                    file_path=file_path,
-                    status="error",
-                    message=msg,
-                ))
+                summary.results.append(
+                    PageResult(
+                        file_path=file_path,
+                        status="error",
+                        message=msg,
+                    )
+                )
             # Don't update the page body with broken attachment references
             continue
 
@@ -364,11 +385,13 @@ def publish_pages(
                 commit_sha=commit_sha,
             )
         except Exception as exc:
-            summary.results.append(PageResult(
-                file_path=file_path,
-                status="error",
-                message=f"Failed to update page {entry.page_id}: {exc}",
-            ))
+            summary.results.append(
+                PageResult(
+                    file_path=file_path,
+                    status="error",
+                    message=f"Failed to update page {entry.page_id}: {exc}",
+                )
+            )
             continue
 
         entry.last_published_hash = new_hash
@@ -393,7 +416,7 @@ def check_pages(manifest: Manifest, repo_root: Path) -> list[str]:
     errors: list[str] = []
     page_id_map = {fp: e.page_id for fp, e in manifest.pages.items() if e.page_id}
 
-    for file_path, entry in manifest.pages.items():
+    for file_path, _entry in manifest.pages.items():
         full_path = repo_root / file_path
         if not full_path.exists():
             errors.append(f"'{file_path}': file not found on disk")
